@@ -2,12 +2,14 @@ import type { RedisLike } from "../redis.backplane";
 
 /**
  * In-memory stand-in for the Redis features RedisBackplane uses (INCR+XADD
- * script, XREAD BLOCK, XREVRANGE), shared by every client it creates so
- * several "replicas" can talk through it. `outage(ms)` makes every client
- * fail like a dropped connection, to exercise reconnect handling.
+ * script, XREAD BLOCK, XREVRANGE) plus the SET NX EX primitive used by the
+ * signature nonce store, shared by every client it creates so several
+ * "replicas" can talk through it. `outage(ms)` makes every client fail like a
+ * dropped connection, to exercise reconnect handling.
  */
 export class FakeRedisBroker {
   private readonly entries: Array<[string, string[]]> = [];
+  private readonly strings = new Map<string, string>();
   private seq = 0;
   private idCounter = 0;
   private downUntil = 0;
@@ -27,6 +29,13 @@ export class FakeRedisBroker {
       if (Date.now() < broker.downUntil) throw new Error("Connection is closed.");
     };
     return {
+      async set(key, value, ...options) {
+        guard();
+        const nx = options.some((opt) => String(opt).toUpperCase() === "NX");
+        if (nx && broker.strings.has(key)) return null;
+        broker.strings.set(key, value);
+        return "OK";
+      },
       async eval(_script, _numKeys, _seqKey, _streamKey, _maxLen, payload) {
         guard();
         const seq = ++broker.seq;
